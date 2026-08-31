@@ -1,0 +1,5 @@
+g2pK2>=0.0.3
+phonenumbers>=9.0.32
+python-dotenv>=1.0
+redis>=5.0
+supertonic>=1.3.1

@@ -1,0 +1,23 @@
+.gradle/
+build/
+out/
+.idea/
+.kotlin
+*.iml
+
+# 실제 접속 정보가 든 env 는 올리지 않는다.
+.env
+.env.*
+!.env.example
+
+# 런타임 산출물 — 오디오·로그는 저장소에 남기지 않는다.
+/job_artifacts/*
+!/job_artifacts/.gitkeep
+/generated_audio/
+/logs/*
+!/logs/.gitkeep
+/samples/
+/redis-docker/data/
+
+.DS_Store
+Thumbs.db

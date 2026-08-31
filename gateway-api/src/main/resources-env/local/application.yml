@@ -1,0 +1,168 @@
+spring:
+  # 로컬 접속 정보는 저장소에 없는 .env 에서 읽는다(형식은 .env.example).
+  # optional: 이라 파일이 없으면 아래 기본값으로 뜨고, [.properties] 는 확장자 없는 파일을
+  # properties 로 읽으라는 표시다. docker compose 도 같은 파일을 읽는다.
+  config:
+    import: optional:file:./.env[.properties]
+  application:
+    name: ai-tts-queuetts-gateway-api
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 21MB
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      connect-timeout: 2s
+      # Redis 가 죽어도 health/overview 가 오래 매달리지 않도록 command timeout 을 짧게 유지
+      timeout: 5s
+      # 접속 정보는 코드에 박지 않고 환경변수로 주입한다 — 여기 기본값은 인증 없는 로컬 Redis 기준이다.
+      password: ${REDIS_PASSWORD:}
+  datasource:
+    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB:ai_tts_queuetts}
+    username: ${POSTGRES_USER:postgres}
+    password: ${POSTGRES_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      pool-name: queuetts-gateway-db-pool
+      maximum-pool-size: 10
+      minimum-idle: 1
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+  # 스키마 마이그레이션. 기동 시 db/migration 의 V*.sql 을 순서대로 적용하고 이력을
+  # flyway_schema_history 에 남긴다. 스키마를 바꿀 때는 기존 파일을 고치지 말고 V2, V3... 를 추가한다.
+  flyway:
+    # DB 를 끈 모드(테스트/인메모리)에서는 마이그레이션도 돌지 않는다 — repository 빈과 같은 스위치다.
+    enabled: ${queuetts.database.enabled:true}
+    locations: classpath:db/migration
+    # 이미 스키마가 올라가 있는 기존 DB 는 V1 을 적용된 것으로 표시하고 그 이후만 실행한다.
+    # (빈 DB 는 V1 부터 실제로 실행된다.)
+    baseline-on-migrate: true
+    baseline-version: 1
+
+server:
+  port: 8080
+
+queuetts:
+  # 동기 TTS 요청(/api/audio/speech 등)이 큐 결과를 기다리는 최대 시간(초)
+  worker-timeout-seconds: 600
+  database:
+    enabled: true
+  job:
+    artifact-dir: job_artifacts
+    artifact-max-bytes: 104857600
+    # 합성 문장 길이 상한(글자 수). 클라이언트의 입력 제한과 같은 값으로 맞춘다.
+    # 워커는 청크를 순차 합성하고 취소를 받지 않으므로, 입력 길이가 곧 GPU 점유 시간이다.
+    text-max-length: 200
+  # Redis Streams 기반 잡 파이프라인. job-stream은 prefix이며 priority별 stream 4개가 생성된다.
+  # gateway는 worker를 전혀 모르고 해당 stream에 XADD만 하며, worker가 result-stream에 넣어준
+  # 결과를 소비한다. worker 수는 네 consumer group의 XINFO CONSUMERS 정보를 합쳐 파악한다.
+  queue:
+    enabled: true
+    # payload 에 model 이 없으면 이 모델로 라우팅한다 (기존 호출자 하위 호환).
+    default-model: supertonic
+    # clone speaker 합성/forget을 처리할 풀. 보이스 클로닝은 qwen 워커만 지원하므로
+    # default-model 로 흘려보내면 supertonic 워커가 unsupported job type 으로 거절한다.
+    voice-model: qwen
+    # 합성 엔진(모델)별 큐. 엔진마다 voice·파라미터 규격이 달라 워커 풀을 분리한다.
+    # 각 워커 프로젝트의 QUEUETTS_JOB_STREAM / QUEUETTS_JOB_GROUP 과 값이 일치해야 한다.
+    models:
+      supertonic:
+        job-stream: tts:jobs
+        job-group: tts-workers
+      qwen:
+        job-stream: qwen:jobs
+        job-group: qwen-workers
+    # 결과 스트림은 모델과 무관하게 하나다 (결과는 jobId 로 식별된다).
+    result-stream: tts:results
+    result-group: gateway
+    # gateway 인스턴스별로 고유해야 하며, 재시작 후 미처리(unacked) 결과 복구를 위해 고정 이름 사용
+    consumer-name: gateway-local
+    job-stream-max-length: 100000
+    # idle 이 이 값 이하인 consumer 만 active worker 로 집계
+    worker-active-idle-ms: 30000
+    # pending 0 이고 idle 이 이 값을 넘는 consumer 는 그룹에서 제거 (중복/유령 worker 방지)
+    worker-evict-idle-ms: 300000
+    # styles 같은 제어 요청의 응답 대기 timeout (초)
+    control-request-timeout-seconds: 30
+  logging:
+    # Logs each DB repository call with its parameters, returned rows and elapsed time.
+    sql: true
+    # Max characters printed per value before truncation (keeps base64/long text readable).
+    max-value-length: 500
+  # API Key 인증. health 계열을 뺀 모든 API 는 X-API-Key 헤더(또는 Authorization: Bearer)를 요구하고,
+  # /api/admin/** 은 role: admin 키만 통과한다.
+  security:
+    enabled: true
+    header-name: X-API-Key
+    # 로컬 편의를 위해 swagger 문서를 무인증으로 열어둔다 (prod 는 문서 자체를 끈다).
+    additional-public-paths:
+      - /swagger-ui.html
+      - /swagger-ui/**
+      - /v3/api-docs
+      - /v3/api-docs/**
+    # 로컬 전용 고정 키. 환경변수로 덮어쓸 수 있으며, 이 값은 절대 dev/prod 로 가져가지 말 것.
+    keys:
+      - id: local-admin
+        key: QUEUETTS-LOCAL-ADMIN-000000000000000
+        role: admin
+      - id: local-client
+        key: QUEUETTS-LOCAL-CLIENT-000000000000000
+        role: client
+    # 브라우저 소비자의 개발 서버 Origin 만 허용한다. 비우면 교차 출처 호출 전면 차단.
+    cors:
+      allowed-origins:
+        - http://localhost:3000
+        - http://localhost:5173
+        - http://127.0.0.1:3000
+        - http://127.0.0.1:5173
+
+# Swagger UI / OpenAPI 문서. 운영(prod) 환경에서는 enabled 를 false 로 두어 외부 노출을 막을 것.
+springdoc:
+  api-docs:
+    enabled: true
+    path: /v3/api-docs
+  swagger-ui:
+    enabled: true
+    path: /swagger-ui.html
+    # 태그/오퍼레이션을 알파벳순으로 정렬해 목록을 읽기 쉽게 한다.
+    tags-sorter: alpha
+    operations-sorter: alpha
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+info:
+  app:
+    name: ${spring.application.name}
+
+logging:
+  file:
+    name: logs/queuetts-gateway.log
+  logback:
+    rollingpolicy:
+      file-name-pattern: logs/queuetts-gateway.%d{yyyy-MM-dd}.%i.log
+      max-history: 30
+      max-file-size: 20MB
+      total-size-cap: 2GB
+  level:
+    # Application code
+    com.aitts.queuetts: DEBUG
+    # Repository call summary (params + results) produced by DataAccessLoggingAspect
+    com.aitts.queuetts.sql: DEBUG
+    # SQL statements executed by JdbcTemplate / NamedParameterJdbcTemplate
+    org.springframework.jdbc.core.JdbcTemplate: DEBUG
+    org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate: DEBUG
+    # Bound parameter values (?-placeholder values)
+    org.springframework.jdbc.core.StatementCreatorUtils: TRACE
+  pattern:
+    console: "%d{HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n"

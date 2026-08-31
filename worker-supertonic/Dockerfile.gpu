@@ -1,0 +1,29 @@
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    SUPERTONIC_CACHE_DIR=/app/model_cache/models/supertonic3 \
+    HF_HOME=/app/model_cache/huggingface \
+    QUEUETTS_ONNX_RUNTIME=gpu
+
+WORKDIR /app
+
+RUN apt-get update -o Acquire::Retries=3 \
+    && apt-get install -y --no-install-recommends -o Acquire::Retries=3 \
+        ffmpeg \
+        libsndfile1 \
+        zlib1g \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt requirements-gpu.txt ./
+RUN python -m pip install --upgrade pip \
+    && python -m pip install -r requirements.txt \
+    && python -m pip uninstall -y onnxruntime \
+    && python -m pip install -r requirements-gpu.txt
+
+COPY . .
+
+RUN mkdir -p /app/model_cache/models /app/custom_styles
+
+CMD ["python", "redis_worker.py"]

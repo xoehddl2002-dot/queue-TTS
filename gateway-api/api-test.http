@@ -1,0 +1,48 @@
+# 엔진별 시나리오는 api-test-supertonic.http / api-test-qwen.http 에 있다.
+# 이 파일은 엔진과 무관한 최소 흐름만 남긴다 (model 생략 = 기본 엔진).
+
+@baseUrl = http://localhost:8080
+# API Key (queuetts.security.keys, local 프로파일 기본값).
+# admin API(/api/admin/...)는 QUEUETTS-LOCAL-ADMIN-000000000000000 이 필요하다.
+@apiKey = QUEUETTS-LOCAL-CLIENT-000000000000000
+
+### TTS 작업 생성 (범용 잡 큐에 tts payload 로 제출)
+# @name createTtsJob
+POST {{baseUrl}}/api/jobs
+Content-Type: application/json
+Accept: application/json
+X-API-Key: {{apiKey}}
+
+{
+  "priority": "high",
+  "source": "tts",
+  "payload": {
+    "text": "안녕하세요. QueueTTS API 테스트입니다. 좀더 길게 이어보자",
+    "voice": "Na-in-ae",
+    "lang": "ko",
+    "speed": 1.05,
+    "steps": 12,
+    "response_format": "wav",
+    "seed": 0,
+    "max_chunk_length": 200,
+    "silence_duration": 0.3
+  }
+}
+> {%
+console.log(response.body)
+    client.global.set("jobId", response.body.job_id);
+%}
+
+### 생성한 job_id로 작업 상태 조회 (state=succeeded 이면 완료)
+GET {{baseUrl}}/api/jobs/{{jobId}}/events
+Accept: application/json
+X-API-Key: {{apiKey}}
+
+### 작업 완료(state=succeeded) 후 음성 결과 다운로드
+GET {{baseUrl}}/api/jobs/{{jobId}}/download
+Accept: audio/wav
+X-API-Key: {{apiKey}}
+
+### health 는 무인증으로 열려 있다 (probe 용)
+GET {{baseUrl}}/api/health
+Accept: application/json

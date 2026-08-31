@@ -1,0 +1,42 @@
+services:
+  gateway-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # 빌드 시 포함할 환경 프로파일 (resources-env/<PROFILE>/application.yml)
+        # PROFILE 환경변수로 덮어쓸 수 있고, 없으면 dev 로 빌드된다.
+        PROFILE: ${PROFILE:-dev}
+    image: queuetts-tts-gateway:latest
+    container_name: queuetts-tts-gateway
+    restart: unless-stopped
+    environment:
+      - SPRING_DATA_REDIS_HOST=host.docker.internal
+      - SPRING_DATA_REDIS_PORT=6379
+      - SPRING_DATA_REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      # API Key (queuetts.security.keys). 값을 쓰지 않은 항목은 호스트에 정의돼 있을 때만 전달된다.
+      # prod 프로파일은 기본값이 없어 미주입 시 기동이 실패하므로 .env 나 호스트 환경변수로 반드시 넘긴다.
+      - QUEUETTS_ADMIN_API_KEY
+      - QUEUETTS_CLIENT_API_KEY
+    logging:
+      driver: "json-file"
+      options:
+        max-size: 20m
+        max-file: 5
+    ports:
+      - "8080:8080"
+    extra_hosts:
+      # 컨테이너에서 호스트(DB / TTS worker)로 접근하기 위한 매핑
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./job_artifacts:/app/job_artifacts
+      - ./logs:/app/logs
+      # 샘플 비교용 음원 (DB 의 legacy/current_audio_path 가 가리키는 상대경로 기준).
+      # 앱은 읽기만 하므로 읽기 전용으로 마운트한다.
+      - ./samples:/app/samples:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s

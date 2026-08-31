@@ -1,0 +1,25 @@
+# Qwen3-TTS worker.
+#
+# torch/torchaudio 는 **같은 릴리스의 같은 CUDA 빌드**여야 한다. 어긋나면 import 시점에
+# torchaudio 의 C 확장 로딩이 실패한다 (`_load_lib("_torchaudio")`).
+# GPU 환경에서는 먼저 아래를 실행한 뒤 이 파일을 설치한다 (CUDA 버전에 맞는 인덱스를 쓸 것):
+#
+#   pip install torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+#
+# 아래 torch/torchaudio 를 **정확한 버전으로 고정**하는 이유: qwen-tts 가 자기 의존성으로
+# 다른 버전을 요구하면 pip 이 이미 깔린 cu124 휠을 PyPI 기본 휠로 조용히 갈아치운다.
+# 고정해 두면 그 상황에서 조용히 깨지는 대신 resolver 가 충돌로 멈춘다.
+# Dockerfile.gpu 의 pin 과 반드시 같은 값을 유지할 것.
+#
+# CPU 로도 돌아가지만 1.7B 자기회귀 모델이라 실사용 속도는 나오지 않는다 (기능 확인용).
+qwen-tts>=0.1
+torch==2.6.0
+torchaudio==2.6.0
+soundfile>=0.12
+numpy>=1.26
+python-dotenv>=1.0
+redis>=5.0
+
+# 한국어 숫자·날짜 정규화(QUEUETTS_QWEN_TEXT_NORMALIZE=1)를 켤 때만 필요하다.
+# 없으면 정규화가 조용히 degrade 하고 나머지 규칙은 그대로 동작한다.
+g2pK2>=0.0.3

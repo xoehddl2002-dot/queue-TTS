@@ -1,0 +1,148 @@
+spring:
+  application:
+    name: ai-tts-queuetts-gateway-api
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 21MB
+  data:
+    redis:
+      # 접속 정보는 코드에 박지 않고 환경변수로 주입한다 (worker 와 같은 Redis 를 봐야 한다).
+      host: ${REDIS_HOST:host.docker.internal}
+      port: ${REDIS_PORT:6379}
+      connect-timeout: 2s
+      timeout: 5s
+      password: ${REDIS_PASSWORD:}
+  datasource:
+    url: jdbc:postgresql://${POSTGRES_HOST:host.docker.internal}:${POSTGRES_PORT:5432}/${POSTGRES_DB:ai_tts_queuetts}
+    username: ${POSTGRES_USER:postgres}
+    password: ${POSTGRES_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      pool-name: queuetts-gateway-db-pool
+      maximum-pool-size: 10
+      minimum-idle: 1
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+  # 스키마 마이그레이션. 기동 시 db/migration 의 V*.sql 을 순서대로 적용하고 이력을
+  # flyway_schema_history 에 남긴다. 스키마를 바꿀 때는 기존 파일을 고치지 말고 V2, V3... 를 추가한다.
+  flyway:
+    # DB 를 끈 모드(테스트/인메모리)에서는 마이그레이션도 돌지 않는다 — repository 빈과 같은 스위치다.
+    enabled: ${queuetts.database.enabled:true}
+    locations: classpath:db/migration
+    # 이미 스키마가 올라가 있는 기존 DB 는 V1 을 적용된 것으로 표시하고 그 이후만 실행한다.
+    # (빈 DB 는 V1 부터 실제로 실행된다.)
+    baseline-on-migrate: true
+    baseline-version: 1
+
+server:
+  port: 8080
+
+queuetts:
+  worker-timeout-seconds: 600
+  database:
+    enabled: true
+  job:
+    artifact-dir: job_artifacts
+    artifact-max-bytes: 104857600
+    # 합성 문장 길이 상한(글자 수). 클라이언트의 입력 제한과 같은 값으로 맞춘다.
+    # 워커는 청크를 순차 합성하고 취소를 받지 않으므로, 입력 길이가 곧 GPU 점유 시간이다.
+    text-max-length: 200
+  queue:
+    enabled: true
+    # payload 에 model 이 없으면 이 모델로 라우팅한다 (기존 호출자 하위 호환).
+    default-model: supertonic
+    # clone speaker 합성/forget을 처리할 풀. 보이스 클로닝은 qwen 워커만 지원하므로
+    # default-model 로 흘려보내면 supertonic 워커가 unsupported job type 으로 거절한다.
+    voice-model: qwen
+    # 합성 엔진(모델)별 큐. prefix 이므로 실제 stream 은 :urgent/high/normal/low 가 붙는다.
+    # 각 워커 프로젝트의 QUEUETTS_JOB_STREAM / QUEUETTS_JOB_GROUP 과 값이 일치해야 한다.
+    models:
+      supertonic:
+        job-stream: tts:jobs
+        job-group: tts-workers
+      qwen:
+        job-stream: qwen:jobs
+        job-group: qwen-workers
+    # 결과 스트림은 모델과 무관하게 하나다 (결과는 jobId 로 식별된다).
+    result-stream: tts:results
+    result-group: gateway
+    consumer-name: gateway-dev
+    job-stream-max-length: 100000
+    worker-active-idle-ms: 30000
+    worker-evict-idle-ms: 300000
+    control-request-timeout-seconds: 30
+  logging:
+    sql: false
+    max-value-length: 200
+  # API Key 인증. health 계열을 뺀 모든 API 는 X-API-Key 헤더(또는 Authorization: Bearer)를 요구하고,
+  # /api/admin/** 은 role: admin 키만 통과한다.
+  security:
+    enabled: true
+    header-name: X-API-Key
+    # dev 는 swagger 를 열어두므로 문서 경로도 무인증으로 둔다 (prod 는 문서 자체를 끈다).
+    additional-public-paths:
+      - /swagger-ui.html
+      - /swagger-ui/**
+      - /v3/api-docs
+      - /v3/api-docs/**
+    # 키는 환경변수로 주입한다. 미주입 시 아래 dev 기본값이 쓰이므로 외부에 노출되는 환경이면 반드시 덮어쓸 것.
+    keys:
+      - id: dev-admin
+        key: ${QUEUETTS_ADMIN_API_KEY:QUEUETTS-DEV-ADMIN-0000000000000000}
+        role: admin
+      - id: dev-client
+        key: ${QUEUETTS_CLIENT_API_KEY:QUEUETTS-DEV-CLIENT-000000000000000}
+        role: client
+    cors:
+      # 브라우저 소비자가 붙으면 여기에 Origin 을 추가한다. 비어 있으면 교차 출처 호출 전면 차단.
+      allowed-origins:
+        - "*"
+
+# Swagger UI / OpenAPI 문서. 운영(prod) 환경에서는 enabled 를 false 로 두어 외부 노출을 막을 것.
+springdoc:
+  api-docs:
+    enabled: true
+    path: /v3/api-docs
+  swagger-ui:
+    enabled: true
+    path: /swagger-ui.html
+    tags-sorter: alpha
+    operations-sorter: method
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+info:
+  app:
+    name: ${spring.application.name}
+
+logging:
+  file:
+    name: logs/queuetts-gateway.log
+  logback:
+    rollingpolicy:
+      file-name-pattern: logs/queuetts-gateway.%d{yyyy-MM-dd}.%i.log
+      max-history: 30
+      max-file-size: 20MB
+      total-size-cap: 2GB
+  level:
+    # Application code
+    com.aitts.queuetts: DEBUG
+    # Repository call summary (params + results) produced by DataAccessLoggingAspect
+    com.aitts.queuetts.sql: DEBUG
+    # SQL statements executed by JdbcTemplate / NamedParameterJdbcTemplate
+    org.springframework.jdbc.core.JdbcTemplate: DEBUG
+    org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate: DEBUG
+    # Bound parameter values (?-placeholder values)
+    org.springframework.jdbc.core.StatementCreatorUtils: TRACE
+  pattern:
+    console: "%d{HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n"

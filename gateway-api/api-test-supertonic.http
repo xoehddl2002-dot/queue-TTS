@@ -1,0 +1,195 @@
+### Supertonic 엔진 API 테스트
+#
+# 잡은 payload 의 model 로 워커 풀이 갈린다. supertonic 은 기본 모델이라
+# model 을 생략해도 같은 곳으로 가지만, 여기서는 의도를 드러내려고 명시한다.
+#   supertonic -> tts:jobs:{priority} / tts-workers
+# Qwen 은 api-test-qwen.http 참고.
+
+@baseUrl = http://localhost:8080
+# API Key (queuetts.security.keys, local 프로파일 기본값).
+@apiKey = QUEUETTS-DEV-CLIENT-000000000000000
+@adminKey = QUEUETTS-DEV-ADMIN-0000000000000000
+@model = supertonic
+
+### health — 무인증 (probe 용). workers[].model 로 어느 엔진 풀인지 구분한다.
+GET {{baseUrl}}/api/health
+Accept: application/json
+
+### 이 엔진의 보이스 목록 (빌트인 F1~F5 / M1~M5 + custom_styles/*.json)
+GET {{baseUrl}}/api/styles?model={{model}}
+Accept: application/json
+X-API-Key: {{apiKey}}
+
+### 전체 엔진 보이스 합쳐 보기 — 각 style 에 model 이 붙는다.
+# 살아있는 워커가 있는 풀만 조회하므로, 안 뜬 엔진은 목록에 없다.
+GET {{baseUrl}}/api/styles
+Accept: application/json
+X-API-Key: {{apiKey}}
+
+### TTS 작업 생성
+# @name createTtsJob
+POST {{baseUrl}}/api/jobs
+Content-Type: application/json
+Accept: application/json
+X-API-Key: {{apiKey}}
+
+{
+  "priority": "high",
+  "source": "tts",
+  "payload": {
+    "model": "supertonic",
+    "text": "안녕하세요. QueueTTS API 테스트입니다. 좀더 길게 이어보자",
+    "voice": "Na-in-ae",
+    "lang": "ko",
+    "speed": 1.05,
+    "steps": 12,
+    "response_format": "wav",
+    "seed": 0,
+    "max_chunk_length": 200,
+    "silence_duration": 0.3
+  }
+}
+> {%
+    client.global.set("jobId", response.body.job_id);
+    client.test("202 로 접수된다", function () {
+        client.assert(response.status === 202, "status: " + response.status);
+    });
+%}
+
+### model 을 생략하면 기본 모델(queuetts.queue.default-model = supertonic)로 간다.
+# 기존 호출자가 그대로 동작하는지 확인하는 케이스.
+POST {{baseUrl}}/api/jobs
+Content-Type: application/json
+Accept: application/json
+X-API-Key: {{apiKey}}
+
+{
+  "priority": "normal",
+  "source": "tts",
+  "payload": {
+    "text": "모델을 지정하지 않으면 기본 엔진으로 갑니다.",
+    "voice": "F1",
+    "lang": "ko",
+    "response_format": "wav"
+  }
+}
+
+### 작업 상태 조회
+GET {{baseUrl}}/api/jobs/{{jobId}}
+Accept: application/json
+X-API-Key: {{apiKey}}
+
+### 완료까지 블로킹 대기 (폴링 대신)
+GET {{baseUrl}}/api/jobs/{{jobId}}/await?timeoutSeconds=120
+Accept: application/json
+X-API-Key: {{apiKey}}
+
+### 대기 + 다운로드를 한 번에 (오디오 바이트 + X-Sample-Rate / X-Audio-Duration 헤더)
+GET {{baseUrl}}/api/jobs/{{jobId}}/await/download?timeoutSeconds=120
+Accept: audio/wav
+X-API-Key: {{apiKey}}
+
+### 완료된 작업의 음성 다운로드
+GET {{baseUrl}}/api/jobs/{{jobId}}/download
+Accept: audio/wav
+X-API-Key: {{apiKey}}
+
+### 상태 변화 SSE 구독
+GET {{baseUrl}}/api/jobs/{{jobId}}/events
+Accept: text/event-stream
+X-API-Key: {{apiKey}}
+
+### 이 소스로 만든 작업 목록
+GET {{baseUrl}}/api/jobs?source=tts&limit=20&offset=0
+Accept: application/json
+X-API-Key: {{apiKey}}
+
+### wait/running 인 작업 취소
+DELETE {{baseUrl}}/api/jobs/{{jobId}}
+Accept: application/json
+X-API-Key: {{apiKey}}
+
+### 결과 메시지가 유실된 wait 작업 재발행
+# 저장된 payload 를 그대로 다시 올리므로 같은 엔진 풀로 재라우팅된다.
+POST {{baseUrl}}/api/jobs/{{jobId}}/requeue
+Accept: application/json
+X-API-Key: {{apiKey}}
+
+### 큐/워커 개요 (admin 키 필요)
+# redisQueue.models 에 엔진별 스트림 길이와 워커 수가 나온다.
+GET {{baseUrl}}/api/admin/job-gateway/overview
+Accept: application/json
+X-API-Key: {{adminKey}}
+
+### 다른 응답 포맷 — flac
+POST {{baseUrl}}/api/jobs
+Content-Type: application/json
+Accept: application/json
+X-API-Key: {{apiKey}}
+
+{
+  "priority": "normal",
+  "source": "tts",
+  "payload": {
+    "model": "supertonic",
+    "text": "플락 포맷으로 저장합니다.",
+    "voice": "M1",
+    "lang": "ko",
+    "response_format": "flac"
+  }
+}
+
+### 느린 한국어 — speed 0.9 이하면 문장 단위로 청킹한다 (Supertonic 전용 동작)
+POST {{baseUrl}}/api/jobs
+Content-Type: application/json
+Accept: application/json
+X-API-Key: {{apiKey}}
+
+{
+  "priority": "low",
+  "source": "tts",
+  "payload": {
+    "model": "supertonic",
+    "text": "천천히 또박또박 읽어 주세요. 문장이 여러 개일 때 끊어 읽습니다.",
+    "voice": "Na-in-ae",
+    "lang": "ko",
+    "speed": 0.9,
+    "response_format": "wav"
+  }
+}
+
+### 없는 voice — 워커가 실패로 응답한다 (접수는 202, 이후 state=failed)
+POST {{baseUrl}}/api/jobs
+Content-Type: application/json
+Accept: application/json
+X-API-Key: {{apiKey}}
+
+{
+  "source": "tts",
+  "payload": {
+    "model": "supertonic",
+    "text": "없는 보이스입니다.",
+    "voice": "NoSuchVoice",
+    "lang": "ko"
+  }
+}
+
+### 등록되지 않은 model — 접수 단계에서 400
+POST {{baseUrl}}/api/jobs
+Content-Type: application/json
+Accept: application/json
+X-API-Key: {{apiKey}}
+
+{
+  "source": "tts",
+  "payload": {
+    "model": "supertonicx",
+    "text": "등록되지 않은 엔진입니다.",
+    "lang": "ko"
+  }
+}
+> {%
+    client.test("400 으로 거절된다", function () {
+        client.assert(response.status === 400, "status: " + response.status);
+    });
+%}

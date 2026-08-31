@@ -1,0 +1,19 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.idea
+
+# 실제 접속 정보가 든 env 는 올리지 않는다. 형식만 *.example 로 공유한다.
+.env
+.env.docker
+!*.example
+
+# ONNX 가중치 캐시 (기동 시 자동 다운로드)
+model_cache/
+
+# 워커가 런타임에 만드는 스타일 파일. 디렉터리만 유지한다.
+custom_styles/*
+!custom_styles/.gitkeep

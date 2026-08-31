@@ -1,0 +1,34 @@
+services:
+  ai-tts-queuetts-qwen-1:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    image: queuetts-tts-model-worker-qwen:gpu
+    container_name: ai-tts-queuetts-model-worker-qwen-1
+    restart: unless-stopped
+    env_file:
+      - .env.docker
+    environment:
+      QUEUETTS_WORKER_ID: qwen-processor-1
+    volumes:
+      # 가중치 캐시. 없으면 컨테이너를 다시 만들 때마다 수 GB 를 다시 받는다.
+      - ./model_cache:/app/model_cache
+      # speakerName 기반 prompt 파생 캐시. 공유할 필요 없고 삭제해도 blob read-through로 복구된다.
+      - ./custom_voices:/app/custom_voices
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "python", "redis_worker.py", "--healthcheck"]
+      interval: 30s
+      timeout: 10s
+      # 가중치 다운로드 + 모델 로드가 Supertonic(ONNX)보다 훨씬 오래 걸린다.
+      # 최초 기동(캐시 없음)은 이보다 더 걸릴 수 있으니 필요하면 늘린다.
+      start_period: 600s
+      retries: 5
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

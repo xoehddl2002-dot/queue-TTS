@@ -1,0 +1,67 @@
+# CUDA **base** 베이스 (runtime/cudnn-runtime 아님). torch 휠이 요구하는 CUDA 버전과 맞춰야 한다.
+#
+# cudnn-runtime 을 쓰면 안 되는 이유: cu124 torch 휠은 필요한 CUDA 라이브러리를 전부
+# `site-packages/nvidia/` 에 직접 번들해 오고 시스템 것을 쓰지 않는다. cudnn-runtime 베이스는
+# 그 똑같은 라이브러리를 apt 로 한 벌 더 싣는다 — libcudnn9 998MB, libcublas 539MB,
+# libcufft 287MB, libcusparse 275MB, libnccl2 235MB ... 합쳐서 약 2.7GB 가 순수 중복이다.
+# base 이미지는 드라이버 호환 shim(cuda-compat)과 container-toolkit 훅만 들고 있어서
+# GPU 접근에 필요한 건 그대로 유지된다.
+FROM nvidia/cuda:12.4.1-base-ubuntu22.04
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    DEBIAN_FRONTEND=noninteractive \
+    HF_HOME=/app/model_cache/huggingface
+
+WORKDIR /app
+
+# sox 는 이 저장소 코드에서 직접 호출하지 않지만 **지우면 안 된다**.
+# qwen_tts 의 import 사슬(`qwen_tts` -> `core` -> `tokenizer_25hz` -> `vq/speech_vq`)이
+# `import sox`(pysox) 를 무조건 밟는다. pysox 는 sox 바이너리가 없으면 예외를 던지지 않고
+# 경고만 찍은 뒤 NO_SOX=True 로 조용히 넘어가므로, 빼면 25Hz 경로에서 조용히 degrade 한다.
+RUN apt-get update -o Acquire::Retries=3 \
+    && apt-get install -y --no-install-recommends -o Acquire::Retries=3 \
+        python3.11 \
+        python3.11-venv \
+        python3-pip \
+        ffmpeg \
+        sox \
+        libsox-fmt-all \
+        libsndfile1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /usr/bin/python3.11 /usr/bin/python
+
+COPY requirements.txt ./
+
+# torch/torchaudio 는 반드시 같은 릴리스와 CUDA 빌드를 사용해야 한다. torchaudio 를
+# PyPI 에 맡기면 최신 CUDA 13 휠이 선택되어 CUDA 12.4 이미지에서 import 가 실패한다.
+# requirements.txt 의 pin 과 같은 값을 유지할 것 (거기서도 고정해 pip 이 조용히 갈아치우는 걸 막는다).
+RUN python -m pip install --upgrade pip \
+    && python -m pip install \
+        torch==2.6.0 \
+        torchaudio==2.6.0 \
+        --index-url https://download.pytorch.org/whl/cu124 \
+    && python -m pip install -r requirements.txt
+
+# 의존성 스모크 체크.
+# 이 부류의 실패(torchaudio C 확장 로딩)는 여태 **컨테이너 기동 시점**에야 드러났다 —
+# 수 GB 이미지를 빌드하고 배포한 뒤에 말이다. 실제로 import 를 해 보고 빌드를 멈춘다.
+# torchaudio.compliance.kaldi 와 qwen_tts 는 워커가 모델을 로드할 때 밟는 바로 그 경로다.
+#
+# cudnn.version() 검사는 base 이미지(cudnn 없음) 전환을 지키는 가드다. 실제로 libcudnn 을
+# dlopen 하므로, torch 휠이 자기 것을 못 찾으면 여기서 빌드가 멈춘다. GPU 없이도 동작한다.
+RUN python -c "\
+import torch, torchaudio, torchaudio.compliance.kaldi, qwen_tts; \
+assert torch.__version__.startswith('2.6.0'), 'torch=' + torch.__version__; \
+assert torchaudio.__version__.startswith('2.6.0'), 'torchaudio=' + torchaudio.__version__; \
+assert torch.version.cuda == '12.4', 'expected cu124 wheels, got cuda=' + str(torch.version.cuda); \
+cudnn = torch.backends.cudnn.version(); \
+assert cudnn and cudnn >= 90100, 'bundled cudnn not loadable, got ' + str(cudnn); \
+print('deps ok: torch=' + torch.__version__ + ' torchaudio=' + torchaudio.__version__ + ' cuda=' + str(torch.version.cuda) + ' cudnn=' + str(cudnn))"
+
+COPY . .
+
+RUN mkdir -p /app/model_cache/huggingface /app/custom_voices
+
+CMD ["python", "redis_worker.py"]

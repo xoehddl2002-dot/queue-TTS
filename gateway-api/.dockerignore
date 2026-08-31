@@ -1,0 +1,17 @@
+.git
+.gradle
+.kotlin
+.idea
+build
+out
+*.iml
+.env
+.env.*
+!.env.example
+.claude
+generated_audio
+job_artifacts
+samples
+README.md
+logs
+docs

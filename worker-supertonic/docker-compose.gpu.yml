@@ -1,0 +1,31 @@
+services:
+  ai-tts-queuetts-1:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    image: queuetts-tts-model-worker-supertonic:gpu
+    container_name: ai-tts-queuetts-model-worker-supertonic-1
+    restart: unless-stopped
+    env_file:
+      - .env.docker
+    environment:
+      QUEUETTS_WORKER_ID: tts-processor-1
+      QUEUETTS_ONNX_RUNTIME: gpu
+    volumes:
+      - ./model_cache:/app/model_cache
+      - ./custom_styles:/app/custom_styles
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "python", "redis_worker.py", "--healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

@@ -1,0 +1,42 @@
+pipeline {
+    agent any
+    environment {
+        PROFILE = 'prod'
+        IMAGE_VERSION = '1.0'
+
+        IMAGE_URL = 'registry.example.com:5000/ai-tts-queuetts-gateway-api'
+    }
+    stages {
+        stage('Build with Gradle') {
+            steps {
+                sh 'java -version'
+            }
+        }
+        stage('Default Check docker and gradlew') {
+            steps {
+                sh 'chmod +x ./gradlew'
+            }
+        }
+        stage('Remove Docker history image') {
+            steps {
+                sh 'docker rmi $IMAGE_URL-$PROFILE:$IMAGE_VERSION || exit 0'
+            }
+        }
+        stage('Gradle Clean') {
+            steps {
+                sh './gradlew clean'
+            }
+        }
+        stage('Docker build and Image') {
+            steps {
+                sh 'docker build --build-arg PROFILE=$PROFILE -t $IMAGE_URL-$PROFILE:$IMAGE_VERSION .'
+            }
+        }
+        stage('Docker push Image') {
+            steps {
+                sh 'docker push $IMAGE_URL-$PROFILE:$IMAGE_VERSION'
+            }
+        }
+    }
+}
+

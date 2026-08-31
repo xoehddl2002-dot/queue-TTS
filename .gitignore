@@ -1,0 +1,11 @@
+# 각 하위 프로젝트가 자기 .gitignore 를 갖는다. 여기는 공통 잡동사니만 둔다.
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+
+# 실제 접속 정보가 든 env 는 어디에 있든 올리지 않는다.
+.env
+.env.*
+!*.example
